@@ -28,6 +28,7 @@ class Session
     protected $client;
     /** @var \PSR\Log\LoggerInterface */
     protected $logger;
+    protected $cache;
     protected $rets_session_id;
     protected $cookie_jar;
     protected $last_request_url;
@@ -60,6 +61,18 @@ class Session
     {
         $this->logger = $logger;
         $this->debug("Loading " . get_class($logger) . " logger");
+    }
+
+
+    /**
+     * PSR-compatible cache can be attached here
+     *
+     * @param $cache
+     */
+    public function setCache($cache)
+    {
+        $this->cache = $cache;
+        $this->debug("Loading " . get_class($cache) . " cache");
     }
 
     /**
@@ -394,6 +407,7 @@ class Session
             if ($cookie) {
                 if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
                     $this->rets_session_id = $matches[1];
+                    $this->debug("New session created: " . $this->rets_session_id . '('.$matches[1].')');
                 }
             }
         }
@@ -584,9 +598,12 @@ class Session
                 'RETS-Version' => $this->configuration->getRetsVersion()->asHeader(),
                 'Accept-Encoding' => 'gzip',
                 'Accept' => '*/*',
-            ],
-            'curl' => [ CURLOPT_COOKIEFILE => tempnam('/tmp', 'phrets') ]
+            ]
         ];
+
+        if ($this->getCookieJar()) {
+            $defaults['cookies'] = $this->getCookieJar();
+        }
 
         // disable following 'Location' header (redirects) automatically
         if ($this->configuration->readOption('disable_follow_location')) {
@@ -602,4 +619,5 @@ class Session
         $container = $this->getConfiguration()->getStrategy()->getContainer();
         $container->instance($parser_name, $parser_object);
     }
+
 }

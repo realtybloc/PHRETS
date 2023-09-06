@@ -91,6 +91,15 @@ class Bulletin
     }
 
     /**
+     * @return mixed
+     */
+    public function getMetadataTimeoutSeconds()
+    {
+        return $this->getDetail('TimeoutSeconds');
+    }
+
+
+    /**
      * @return string
      */
     public function __toString()
