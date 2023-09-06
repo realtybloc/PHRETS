@@ -1,5 +1,6 @@
 <?php namespace PHRETS;
 
+use Carbon\Carbon;
 use GuzzleHttp\Client;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Cookie\CookieJarInterface;
@@ -15,8 +16,9 @@ use PHRETS\Interpreters\GetObject;
 use PHRETS\Interpreters\Search;
 use PHRETS\Models\BaseObject;
 use PHRETS\Models\Bulletin;
-use PHRETS\Strategies\Strategy;
 use Psr\Http\Message\ResponseInterface;
+use PHRETS\Strategies\StandardStrategy;
+use PHRETS\Strategies\Strategy;
 
 class Session
 {
@@ -144,7 +146,9 @@ class Session
             ]
         );
 
-        if (stripos($response->getHeader('Content-Type'), 'multipart') !== false) {
+        $contentType = $response->getHeader('Content-Type')[0] ?? '';
+
+        if (stripos($contentType, 'multipart') !== false) {
             $parser = $this->grab(Strategy::PARSER_OBJECT_MULTIPLE);
             $collection = $parser->parse($response);
         } else {
@@ -331,11 +335,20 @@ class Session
      */
     protected function request($capability, $options = [], $is_retry = false)
     {
+
         $url = $this->capabilities->get($capability);
+        $cachedSessionId = $this->cache->get('rets_session');
 
         if (!$url) {
             throw new CapabilityUnavailable("'{$capability}' tried but no valid endpoint was found.  Did you forget to Login()?");
         }
+
+        if ($cachedSessionId) {
+
+            $this->rets_session_id = $cachedSessionId;
+            $this->debug("Using cached session ID: " . $cachedSessionId);
+
+        };
 
         $options = array_merge($this->getDefaultOptions(), $options);
 
@@ -358,14 +371,18 @@ class Session
                 $local_options = $options;
                 unset($local_options['query']);
                 $response = $this->client->request('POST', $url, array_merge($local_options, ['form_params' => $query]));
+
             } else {
+
                 if (array_key_exists('query', $options)) {
                     $this->last_request_url = $url . '?' . \http_build_query($options['query']);
                 }
 
                 $response = $this->client->request('GET', $url, $options);
             }
+
         } catch (ClientException $e) {
+
             $this->debug("ClientException: " . $e->getCode() . ": " . $e->getMessage());
 
             if ($e->getCode() != 401) {
@@ -402,14 +419,19 @@ class Session
 
         $this->last_response = $response;
 
-        if ($response->getHeader('Set-Cookie')) {
-            $cookie = $response->getHeader('Set-Cookie');
-            if ($cookie) {
-                if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
-                    $this->rets_session_id = $matches[1];
-                    $this->debug("New session created: " . $this->rets_session_id . '('.$matches[1].')');
+        if (!$cachedSessionId) {
+
+            if ($response->getHeader('Set-Cookie')) {
+                $cookie = $response->getHeader('Set-Cookie');
+                if ($cookie) {
+                    if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
+                        $this->rets_session_id = $matches[1];
+                        $this->debug("New session created: " . $this->rets_session_id . '('.$matches[1].')');
+                        $this->cache->put('rets_session', $this->rets_session_id, 90);
+                    }
                 }
             }
+
         }
 
         $this->debug('Response: HTTP ' . $response->getStatusCode());
@@ -616,8 +638,15 @@ class Session
     public function setParser($parser_name, $parser_object)
     {
         /** @var Container $container */
-        $container = $this->getConfiguration()->getStrategy()->getContainer();
-        $container->instance($parser_name, $parser_object);
+        $strategy = $this->getConfiguration()->getStrategy();
+
+        if ($strategy instanceof StandardStrategy) {
+            $container = $strategy->getContainer();
+            $container->instance($parser_name, $parser_object);
+        } else {
+            // Handle the error: Strategy isn't a StandardStrategy and therefore doesn't have getContainer()
+            $this->debug("Strategy isn't a StandardStrategy and therefore doesn't have getContainer()");
+        }
     }
 
 }
