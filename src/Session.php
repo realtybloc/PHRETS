@@ -1,7 +1,7 @@
 <?php namespace PHRETS;
 
 use Carbon\Carbon;
-use GuzzleHttp\Client;
+use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Cookie\CookieJarInterface;
 use GuzzleHttp\Exception\ClientException;
@@ -19,6 +19,8 @@ use PHRETS\Models\Bulletin;
 use Psr\Http\Message\ResponseInterface;
 use PHRETS\Strategies\StandardStrategy;
 use PHRETS\Strategies\Strategy;
+use GuzzleHttp\TransferStats;
+use Throwable;
 
 class Session
 {
@@ -45,13 +47,16 @@ class Session
         $defaults = [];
 
         // start up our Guzzle HTTP client
-        $this->client = PHRETSClient::make($defaults);
+        $this->client = new GuzzleClient;
 
-        $this->cookie_jar = new CookieJar;
+        $this->setCookieJar(new CookieJar);
 
         // start up the Capabilities tracker and add Login as the first one
         $this->capabilities = new Capabilities;
         $this->capabilities->add('Login', $configuration->getLoginUrl());
+
+        $this->debug("Loading new" . get_class($this->client) . " HTTP client");
+
     }
 
     /**
@@ -88,7 +93,16 @@ class Session
             throw new MissingConfiguration("Cannot issue Login without a valid configuration loaded");
         }
 
-        $response = $this->request('Login');
+        try {
+
+            $response = $this->request('Login');
+            $this->debug("Login request sent");
+
+        } catch (Throwable $e) {
+
+            $this->debug("Login Exception" . $e->getCode() . ": " . $e->getMessage());
+            throw $e;
+        }
 
         $parser = $this->grab(Strategy::PARSER_LOGIN);
         $xml = new \SimpleXMLElement((string)$response->getBody());
@@ -133,7 +147,6 @@ class Session
     public function GetObject($resource, $type, $content_ids, $object_ids = '*', $location = 0)
     {
         $request_id = GetObject::ids($content_ids, $object_ids);
-
         $response = $this->request(
             'GetObject',
             [
@@ -149,9 +162,13 @@ class Session
         $contentType = $response->getHeader('Content-Type')[0] ?? '';
 
         if (stripos($contentType, 'multipart') !== false) {
+
             $parser = $this->grab(Strategy::PARSER_OBJECT_MULTIPLE);
             $collection = $parser->parse($response);
+
+
         } else {
+
             $collection = new Collection;
             $parser = $this->grab(Strategy::PARSER_OBJECT_SINGLE);
             $object = $parser->parse($response);
@@ -333,54 +350,64 @@ class Session
      * @throws CapabilityUnavailable
      * @throws RETSException
      */
-    protected function request($capability, $options = [], $is_retry = false)
+    protected function request($capability, $options = [])
     {
 
+        $this->debug("Requesting {$capability} ({$this->capabilities->get($capability)})");
+
         $url = $this->capabilities->get($capability);
-        $cachedSessionId = $this->cache->get('rets_session');
 
         if (!$url) {
             throw new CapabilityUnavailable("'{$capability}' tried but no valid endpoint was found.  Did you forget to Login()?");
         }
 
-        if ($cachedSessionId) {
-
-            $this->rets_session_id = $cachedSessionId;
-            $this->debug("Using cached session ID: " . $cachedSessionId);
-
-        };
-
         $options = array_merge($this->getDefaultOptions(), $options);
 
         // user-agent authentication
         if ($this->configuration->getUserAgentPassword()) {
+
+            $this->debug('session id ->>'.$this->getRetsSessionId());
             $ua_digest = $this->configuration->userAgentDigestHash($this);
             $options['headers'] = array_merge($options['headers'], ['RETS-UA-Authorization' => 'Digest ' . $ua_digest]);
-        }
+        };
 
-        $this->debug("Sending HTTP Request for {$url} ({$capability})", $options);
         $this->last_request_url = $url;
 
         try {
-            /** @var ResponseInterface $response */
-            if ($this->configuration->readOption('use_post_method')) {
-                $this->debug('Using POST method per use_post_method option');
-                $query = (array_key_exists('query', $options)) ? $options['query'] : null;
-
-                // do not send query options in url, only in form_params
-                $local_options = $options;
-                unset($local_options['query']);
-                $response = $this->client->request('POST', $url, array_merge($local_options, ['form_params' => $query]));
-
-            } else {
-
-                if (array_key_exists('query', $options)) {
-                    $this->last_request_url = $url . '?' . \http_build_query($options['query']);
+            $query = (array_key_exists('query', $options)) ? $options['query'] : null;
+        
+            $local_options = $options;
+            unset($local_options['query']);
+            
+            $merged_options = array_merge($local_options, ['form_params' => $query], [
+                'on_stats' => function (TransferStats $stats) {
+                    $request = $stats->getRequest();
+                    $response = $stats->getResponse();
+            
+                    // Log or print request details
+                    $this->debug('Request URI: ', [$request->getUri()]);
+                    $this->debug('Request Headers: ', [$request->getHeaders()]);
+            
+                    // Log or print response details, if available
+                    if ($response) {
+                        $this->debug('Response Code: ', [$response->getStatusCode()]);
+                        $this->debug('Response Headers: ', [$response->getHeaders()]);
+                    }
+            
+                    // Logging cookies
+                    $requestCookies = $request->getHeader('Cookie');
+                    $this->debug('Request Cookies: ', [$requestCookies]);
+            
+                    if ($response) {
+                        $responseCookies = $response->getHeader('Set-Cookie');
+                        $this->debug('Response Cookies: ', [$responseCookies]);
+                    }
                 }
+            ]);
 
-                $response = $this->client->request('GET', $url, $options);
-            }
-
+            $response = $this->client->request('POST', $url, $merged_options);            
+            $this->debug('Response', [$response]);
+        
         } catch (ClientException $e) {
 
             $this->debug("ClientException: " . $e->getCode() . ": " . $e->getMessage());
@@ -395,114 +422,31 @@ class Session
                 throw $e;
             }
 
-            if ($is_retry) {
-                // this attempt was already a retry, so let's stop here
-                $this->debug("Request retry failed.  Won't retry again");
-                throw $e;
-            }
-
-            if ($this->getConfiguration()->readOption('disable_auto_retry')) {
-                // this attempt was already a retry, so let's stop here
-                $this->debug("Re-logging in disabled.  Won't retry");
-                throw $e;
-            }
-
             $this->debug("401 Unauthorized exception returned");
-            $this->debug("Logging in again and retrying request");
-            // see if logging in again and retrying the request works
-            $this->Login();
-
-            return $this->request($capability, $options, true);
         }
 
         $response = new \PHRETS\Http\Response($response);
 
         $this->last_response = $response;
 
-        if (!$cachedSessionId) {
+        if ($response->getHeader('Set-Cookie')) {
+            $cookie = $response->getHeader('Set-Cookie');
+            $this->debug('Set-Cookie: ', ['ccokies' => $cookie]);
+            
+            // If getHeader returns an array of cookies, join them into one string.
+            if (is_array($cookie) && !empty($cookie)) {
+                $cookie = implode('; ', $cookie);
+            };
 
-            if ($response->getHeader('Set-Cookie')) {
-                $cookie = $response->getHeader('Set-Cookie');
-                if ($cookie) {
-                    if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
-                        $this->rets_session_id = $matches[1];
-                        $this->debug("New session created: " . $this->rets_session_id . '('.$matches[1].')');
-                        $this->cache->put('rets_session', $this->rets_session_id, 90);
-                    }
-                }
+            if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
+                $this->rets_session_id = $matches[1];
+                $this->debug("New session created: " . $this->rets_session_id);
+            } else {
+                $this->debug("Failed to extract session ID from Set-Cookie header");
             }
-
         }
 
         $this->debug('Response: HTTP ' . $response->getStatusCode());
-
-        if (stripos($response->getHeader('Content-Type'), 'text/xml') !== false and $capability != 'GetObject') {
-            $parser = $this->grab(Strategy::PARSER_XML);
-            $xml = $parser->parse($response);
-
-            if ($xml and isset($xml['ReplyCode'])) {
-                $rc = (string)$xml['ReplyCode'];
-
-                if ($rc == "20037" and $capability != 'Login') {
-                    // must make Login request again.  let's handle this automatically
-
-                    if ($this->getConfiguration()->readOption('disable_auto_retry')) {
-                        // this attempt was already a retry, so let's stop here
-                        $this->debug("Re-logging in disabled.  Won't retry");
-                        throw new RETSException($xml['ReplyText'], (int)$xml['ReplyCode']);
-                    }
-
-                    if ($is_retry) {
-                        // this attempt was already a retry, so let's stop here
-                        $this->debug("Request retry failed.  Won't retry again");
-                        // let this error fall through to the more generic handling below
-                    } else {
-                        $this->debug("RETS 20037 re-auth requested");
-                        $this->debug("Logging in again and retrying request");
-                        // see if logging in again and retrying the request works
-                        $this->Login();
-
-                        return $this->request($capability, $options, true);
-                    }
-                }
-
-                // 20201 - No records found - not exception worthy in my mind
-                // 20403 - No objects found - not exception worthy in my mind
-                if (!in_array($rc, [0, 20201, 20403])) {
-                    throw new RETSException($xml['ReplyText'], (int)$xml['ReplyCode']);
-                }
-            }
-        }
-
-        if ($this->getConfiguration()->readOption('getobject_auto_retry') and $capability == 'GetObject') {
-            if (stripos($response->getHeader('Content-Type'), 'multipart') !== false) {
-                $parser = $this->grab(Strategy::PARSER_OBJECT_MULTIPLE);
-                $collection = $parser->parse($response);
-            } else {
-                $collection = new Collection;
-                $parser = $this->grab(Strategy::PARSER_OBJECT_SINGLE);
-                $object = $parser->parse($response);
-                $collection->push($object);
-            }
-
-            /** @var BaseObject[] $collection */
-            foreach ($collection as $object) {
-                if ($object->isError() and $object->getError()->getCode() == '20037') {
-                    if ($is_retry) {
-                        // this attempt was already a retry, so let's stop here
-                        $this->debug("Request retry failed.  Won't retry again");
-                        // let this error fall through to the more generic handling below
-                    } else {
-                        $this->debug("RETS 20037 re-auth requested");
-                        $this->debug("Logging in again and retrying request");
-                        // see if logging in again and retrying the request works
-                        $this->Login();
-
-                        return $this->request($capability, $options, true);
-                    }
-                }
-            }
-        }
 
         return $response;
     }
@@ -620,17 +564,10 @@ class Session
                 'RETS-Version' => $this->configuration->getRetsVersion()->asHeader(),
                 'Accept-Encoding' => 'gzip',
                 'Accept' => '*/*',
-            ]
+            ],
+            'cookies' => $this->getCookieJar(),
+            'allow_redirects' => false // disable following 'Location' header (redirects) automatically
         ];
-
-        if ($this->getCookieJar()) {
-            $defaults['cookies'] = $this->getCookieJar();
-        }
-
-        // disable following 'Location' header (redirects) automatically
-        if ($this->configuration->readOption('disable_follow_location')) {
-            $defaults['allow_redirects'] = false;
-        }
 
         return $defaults;
     }

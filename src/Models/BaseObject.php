@@ -36,7 +36,7 @@ class BaseObject
      */
     public function getContentDescription()
     {
-        return $this->content_description;
+        return $this->checkHeaderSafe($this->content_description);
     }
 
     /**
@@ -45,7 +45,7 @@ class BaseObject
      */
     public function setContentDescription($content_description)
     {
-        $this->content_description = $content_description;
+        $this->content_description = $this->checkHeaderSafe($content_description);
         return $this;
     }
 
@@ -54,7 +54,7 @@ class BaseObject
      */
     public function getContentId()
     {
-        return $this->content_id;
+        return $this->checkHeaderSafe($this->content_id);
     }
 
     /**
@@ -63,7 +63,7 @@ class BaseObject
      */
     public function setContentId($content_id)
     {
-        $this->content_id = $content_id;
+        $this->content_id = $this->checkHeaderSafe($content_id);
         return $this;
     }
 
@@ -72,7 +72,7 @@ class BaseObject
      */
     public function getContentSubDescription()
     {
-        return $this->content_sub_description;
+        return $this->checkHeaderSafe($this->content_sub_description);
     }
 
     /**
@@ -81,7 +81,7 @@ class BaseObject
      */
     public function setContentSubDescription($content_sub_description)
     {
-        $this->content_sub_description = $content_sub_description;
+        $this->content_sub_description = $this->checkHeaderSafe($content_sub_description);
         return $this;
     }
 
@@ -90,7 +90,7 @@ class BaseObject
      */
     public function getContentType()
     {
-        return $this->content_type;
+        return $this->checkHeaderSafe($this->content_type);
     }
 
     /**
@@ -99,7 +99,7 @@ class BaseObject
      */
     public function setContentType($content_type)
     {
-        $this->content_type = $content_type;
+        $this->content_type = $this->checkHeaderSafe($content_type);
         return $this;
     }
 
@@ -108,7 +108,7 @@ class BaseObject
      */
     public function getLocation()
     {
-        return $this->location;
+        return $this->checkHeaderSafe($this->location);
     }
 
     /**
@@ -117,7 +117,7 @@ class BaseObject
      */
     public function setLocation($location)
     {
-        $this->location = $location;
+        $this->location = $this->checkHeaderSafe($location);
         return $this;
     }
 
@@ -126,7 +126,7 @@ class BaseObject
      */
     public function getMimeVersion()
     {
-        return $this->mime_version;
+        return $this->checkHeaderSafe($this->mime_version);
     }
 
     /**
@@ -135,7 +135,7 @@ class BaseObject
      */
     public function setMimeVersion($mime_version)
     {
-        $this->mime_version = $mime_version;
+        $this->mime_version = $this->checkHeaderSafe($mime_version);
         return $this;
     }
 
@@ -144,7 +144,7 @@ class BaseObject
      */
     public function getObjectId()
     {
-        return $this->object_id;
+        return $this->checkHeaderSafe($this->object_id);
     }
 
     /**
@@ -153,7 +153,7 @@ class BaseObject
      */
     public function setObjectId($object_id)
     {
-        $this->object_id = $object_id;
+        $this->object_id = $this->checkHeaderSafe($object_id);
         return $this;
     }
 
@@ -173,11 +173,12 @@ class BaseObject
             'MIME-Version' => 'MimeVersion',
             'Preferred' => 'Preferred',
         ];
-
+    
         $headers = array_change_key_case($headers, CASE_UPPER);
-
+    
         if (array_key_exists(strtoupper($name), $headers)) {
             $method = 'set' . $headers[strtoupper($name)];
+            $value = $this->checkHeaderSafe($value);
             $this->$method($value);
         }
     }
@@ -195,7 +196,7 @@ class BaseObject
      */
     public function getPreferred()
     {
-        return $this->preferred;
+        return $this->checkHeaderSafe($this->preferred);
     }
 
     /**
@@ -214,7 +215,7 @@ class BaseObject
      */
     public function setPreferred($preferred)
     {
-        $this->preferred = $preferred;
+        $this->preferred = $this->checkHeaderSafe($preferred);
         return $this;
     }
 
@@ -243,4 +244,17 @@ class BaseObject
     {
         return ($this->error !== null);
     }
+
+    public function checkHeaderSafe($value)
+    {
+        // Perform safety checks and transformations here
+        if (is_array($value) && count($value) > 0) {
+            $value = $value[0];
+        } elseif ($value === null) {
+            $value = null;
+        };
+
+        return $value;
+    }
+
 }

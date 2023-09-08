@@ -14,23 +14,37 @@ class Multiple
             return $collection;
         }
 
-        // help bad responses be more multipart compliant
+        // Help bad responses be more multipart compliant
         $body = "\r\n" . $response->getBody()->__toString() . "\r\n";
 
-        // multipart
-        preg_match('/boundary\=\"(.*?)\"/', $response->getHeader('Content-Type'), $matches);
+        // Get Content-Type header value
+        $contentTypeArray = $response->getHeader('Content-Type');
+        if (empty($contentTypeArray)) {
+            // Log an error or throw an exception
+            return $collection;
+        };
+
+        $contentTypeString = $contentTypeArray[0];
+
+        // Initialize boundary to null
+        $boundary = null;
+
+        // Try to match boundary within quotes
+        preg_match('/boundary="([^"]+)"/', $contentTypeString, $matches);
         if (isset($matches[1])) {
             $boundary = $matches[1];
         } else {
-            preg_match('/boundary\=(.*?)(\s|$|\;)/', $response->getHeader('Content-Type'), $matches);
+            // Try to match boundary without quotes
+            preg_match('/boundary=([^;,\s]+)/', $contentTypeString, $matches);
             if (isset($matches[1])) {
                 $boundary = $matches[1];
-            } else {
-                $boundary = null;
             }
         }
-        // strip quotes off of the boundary
-        $boundary = preg_replace('/^\"(.*?)\"$/', '\1', $boundary);
+
+        if ($boundary === null) {
+            // Handle error - boundary not found
+            return $collection; // Or throw an exception or do other error handling
+        }
 
         // clean up the body to remove a reamble and epilogue
         $body = preg_replace('/^(.*?)\r\n--' . $boundary . '\r\n/', "\r\n--{$boundary}\r\n", $body);
@@ -54,7 +68,6 @@ class Multiple
             // now throw this single faked message through the Single GetObject response parser
             $single = new PHRETSResponse(new Response($parts->getStatusCode(), $parts->getHeaders(), (string)$parts->getBody()));
             $obj = $parser->parse($single);
-
             // add information about this multipart to the returned collection
             $collection->push($obj);
         }

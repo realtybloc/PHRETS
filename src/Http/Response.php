@@ -21,6 +21,7 @@ class Response
 
 	public function xml()
 	{
+		var_dump($this->response->getBody());
 		$body = (string) $this->response->getBody();
 
 		// Remove any carriage return / newline in XML response.
@@ -36,12 +37,6 @@ class Response
 
 	public function getHeader($name)
 	{
-		$headers = $this->response->getHeader($name);
-
-		if ($headers) {
-			return implode('; ', $headers);
-		} else {
-			return null;
-		}
+		return $this->response->getHeader($name);
 	}
 }
