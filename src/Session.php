@@ -1,6 +1,6 @@
 <?php namespace PHRETS;
 
-use Carbon\Carbon;
+use Exception;
 use GuzzleHttp\Client as GuzzleClient;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Cookie\CookieJarInterface;
@@ -11,7 +11,6 @@ use PHRETS\Exceptions\CapabilityUnavailable;
 use PHRETS\Exceptions\MetadataNotFound;
 use PHRETS\Exceptions\MissingConfiguration;
 use PHRETS\Exceptions\RETSException;
-use PHRETS\Http\Client as PHRETSClient;
 use PHRETS\Interpreters\GetObject;
 use PHRETS\Interpreters\Search;
 use PHRETS\Models\BaseObject;
@@ -147,6 +146,7 @@ class Session
     public function GetObject($resource, $type, $content_ids, $object_ids = '*', $location = 0)
     {
         $request_id = GetObject::ids($content_ids, $object_ids);
+
         $response = $this->request(
             'GetObject',
             [
@@ -374,8 +374,8 @@ class Session
         $this->last_request_url = $url;
 
         try {
+
             $query = (array_key_exists('query', $options)) ? $options['query'] : null;
-        
             $local_options = $options;
             unset($local_options['query']);
             
@@ -405,7 +405,7 @@ class Session
                 }
             ]);
 
-            $response = $this->client->request('POST', $url, $merged_options);            
+            $response = $this->client->request('POST', $url, $merged_options);
             $this->debug('Response', [$response]);
         
         } catch (ClientException $e) {
@@ -420,33 +420,43 @@ class Session
             if ($capability == 'Login') {
                 // unauthorized on a Login request, so bail
                 throw $e;
-            }
-
-            $this->debug("401 Unauthorized exception returned");
-        }
-
-        $response = new \PHRETS\Http\Response($response);
-
-        $this->last_response = $response;
-
-        if ($response->getHeader('Set-Cookie')) {
-            $cookie = $response->getHeader('Set-Cookie');
-            $this->debug('Set-Cookie: ', ['ccokies' => $cookie]);
-            
-            // If getHeader returns an array of cookies, join them into one string.
-            if (is_array($cookie) && !empty($cookie)) {
-                $cookie = implode('; ', $cookie);
             };
 
-            if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
-                $this->rets_session_id = $matches[1];
-                $this->debug("New session created: " . $this->rets_session_id);
-            } else {
-                $this->debug("Failed to extract session ID from Set-Cookie header");
-            }
-        }
+            $this->logout();
+            $response = null;
+            $this->debug("401 Unauthorized exception returned");
+        };
 
-        $this->debug('Response: HTTP ' . $response->getStatusCode());
+        if ($response !== null) {
+
+            $response = new \PHRETS\Http\Response($response);
+
+            $this->last_response = $response;
+
+            if ($response->getHeader('Set-Cookie')) {
+                $cookie = $response->getHeader('Set-Cookie');
+                $this->debug('Set-Cookie: ', ['ccokies' => $cookie]);
+
+                // If getHeader returns an array of cookies, join them into one string.
+                if (is_array($cookie) && !empty($cookie)) {
+                    $cookie = implode('; ', $cookie);
+                };
+
+                if (preg_match('/RETS-Session-ID\=(.*?)(\;|\s+|$)/', $cookie, $matches)) {
+                    $this->rets_session_id = $matches[1];
+                    $this->debug("New session created: " . $this->rets_session_id);
+                } else {
+                    $this->debug("Failed to extract session ID from Set-Cookie header");
+                }
+            };
+
+            $this->debug('Response: HTTP ' . $response->getStatusCode());
+
+        } else {
+
+            $this->debug('No response received.');
+            throw new RETSException('No response received from the server.');
+        };
 
         return $response;
     }
