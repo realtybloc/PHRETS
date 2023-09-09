@@ -97,7 +97,7 @@ class Session
             $response = $this->request('Login');
             $this->debug("Login request sent");
 
-        } catch (Throwable $e) {
+        } catch (RETSException $e) {
 
             $this->debug("Login Exception" . $e->getCode() . ": " . $e->getMessage());
             throw $e;
@@ -147,17 +147,22 @@ class Session
     {
         $request_id = GetObject::ids($content_ids, $object_ids);
 
-        $response = $this->request(
-            'GetObject',
-            [
-                'query' => [
-                    'Resource' => $resource,
-                    'Type' => $type,
-                    'ID' => implode(',', $request_id),
-                    'Location' => $location,
+        try {
+            $response = $this->request(
+                'GetObject',
+                [
+                    'query' => [
+                        'Resource' => $resource,
+                        'Type' => $type,
+                        'ID' => implode(',', $request_id),
+                        'Location' => $location,
+                    ]
                 ]
-            ]
-        );
+            );
+        } catch (RETSException $e) {
+            $this->debug("GetObject Exception" . $e->getCode() . ": " . $e->getMessage());
+            throw $e; // Or handle the exception as you see fit
+        }
 
         $contentType = $response->getHeader('Content-Type')[0] ?? '';
 
@@ -308,12 +313,19 @@ class Session
             $parameters['Select'] = implode(',', $parameters['Select']);
         }
 
-        $response = $this->request(
-            'Search',
-            [
-                'query' => $parameters
-            ]
-        );
+        try {
+
+            $response = $this->request(
+                'Search',
+                [
+                    'query' => $parameters
+                ]
+            );
+
+        } catch (RETSException $e) {
+            $this->debug("Search Exception " . $e->getCode() . ": " . $e->getMessage());
+            throw $e; // Or handle the exception as you see fit
+        }
 
         if ($recursive) {
             $parser = $this->grab(Strategy::PARSER_SEARCH_RECURSIVE);
@@ -369,6 +381,7 @@ class Session
             $this->debug('session id ->>'.$this->getRetsSessionId());
             $ua_digest = $this->configuration->userAgentDigestHash($this);
             $options['headers'] = array_merge($options['headers'], ['RETS-UA-Authorization' => 'Digest ' . $ua_digest]);
+
         };
 
         $this->last_request_url = $url;
@@ -410,21 +423,20 @@ class Session
         
         } catch (ClientException $e) {
 
-            $this->debug("ClientException: " . $e->getCode() . ": " . $e->getMessage());
-
             if ($e->getCode() != 401) {
                 // not an Unauthorized error, so bail
-                throw $e;
+                $this->debug("ClientException: " . $e->getCode() . ": " . $e->getMessage());
+                throw new RETSException($e->getMessage(), $e->getCode(), $e);
             }
 
             if ($capability == 'Login') {
                 // unauthorized on a Login request, so bail
-                throw $e;
+                $this->debug("ClientException in Login: " . $e->getCode() . ": " . $e->getMessage());
+                throw new RETSException($e->getMessage(), $e->getCode(), $e);
             };
 
             $this->logout();
             $response = null;
-            $this->debug("401 Unauthorized exception returned");
         };
 
         if ($response !== null) {
